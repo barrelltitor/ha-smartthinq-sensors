@@ -170,6 +170,119 @@ Note: When something doesn't apply and/or is off, it may have a `-` as its value
 
 </details>
 
+#### Start a washer with custom course options
+
+ThinQ2 washer models that advertise Smart Course downloads also expose a
+`Downloaded course` select. Choosing an option replaces the appliance's
+download slot but does not start a cycle. The same operation is available as an
+action:
+
+```yaml
+action: smartthinq_sensors.download_course
+target:
+  entity_id: sensor.my_washer
+data:
+  course: "Jeans"
+```
+
+The main washer sensor exposes `downloadable_courses`, `downloaded_course`, and
+`download_course_limit` attributes. A successful download is also staged for
+the next Remote Start, so you can inspect `prepared_course` and then press the
+integration's Remote Start button. The appliance model controls which Smart
+Courses are listed; downloading replaces an existing slot when the reported
+limit has been reached.
+
+The `smartthinq_sensors.remote_start` action can start a named course and replace
+model-supported course defaults such as temperature, spin, rinse, or drying
+settings. The washer must be powered on, physically armed for Remote Start, and
+ready to start a new cycle.
+
+Course names, option keys, and option values come from the washer's ThinQ model
+data and vary by model. Invalid combinations are rejected before a command is
+sent, and the Home Assistant action error lists the available choices. The main
+washer sensor exposes the same information in its `course_options` attribute.
+Each course contains only adjustable options, with the model's `default` value
+and its `selectable` values, so dashboards and scripts can validate choices
+without duplicating the appliance model table.
+
+On ThinQ2 washer-dryers whose Wash+Dry and Dry Only definitions omit a
+per-course choice list, the integration uses the model's `dryLevel` enum. For
+example, the inspected `F_V7_F___W.B_2QEUK` model supports regular drying
+(`DRYLEVEL_NORMAL`), timed drying (`DRYLEVEL_30` through `DRYLEVEL_150`), and
+low-temperature drying (`DRYLEVEL_LOW`). Internal states such as
+`DRYLEVEL_COOLING` cannot be sent as course overrides.
+
+To validate and stage a preset without sending anything to the appliance, use
+`smartthinq_sensors.prepare_course` with the same `course` and `overrides` data:
+
+```yaml
+action: smartthinq_sensors.prepare_course
+target:
+  entity_id: sensor.my_washer
+data:
+  course: "Mixed Fabric"
+  overrides:
+    temp: "TEMP_40"
+    spin: "SPIN_1200"
+```
+
+A Wash+Dry preset with 60-minute timed drying uses the same action:
+
+```yaml
+action: smartthinq_sensors.prepare_course
+target:
+  entity_id: sensor.my_washer
+data:
+  course: "Wash+Dry"
+  overrides:
+    temp: "TEMP_40"
+    spin: "SPIN_Max"
+    dryLevel: "DRYLEVEL_60"
+```
+
+The main washer sensor then exposes `prepared_course` and
+`prepared_course_options` attributes for verification. A later call to
+`smartthinq_sensors.remote_start` without course data, or a press of the
+integration's Remote Start button entity, starts that prepared preset. Preparing
+a course is local to Home Assistant and does not change the appliance display.
+
+```yaml
+action: smartthinq_sensors.remote_start
+target:
+  entity_id: sensor.my_washer
+data:
+  course: "Mixed Fabric"
+  overrides:
+    temp: "TEMP_40"
+    spin: "SPIN_1200"
+```
+
+The same action can be called directly from a dashboard button:
+
+```yaml
+type: button
+name: Mixed 40 C / 1200 rpm
+icon: mdi:washing-machine
+tap_action:
+  action: perform-action
+  perform_action: smartthinq_sensors.remote_start
+  target:
+    entity_id: sensor.my_washer
+  data:
+    course: "Mixed Fabric"
+    overrides:
+      temp: "TEMP_40"
+      spin: "SPIN_1200"
+  confirmation:
+    text: Start this washing preset?
+```
+
+If the armed washer has entered power-save sleep, call
+`smartthinq_sensors.wake_up` first. Sleeping washer-dryers can report an empty
+status rather than the normal standby flag, so the wake action is intentionally
+allowed in that state. Waking does not bypass the requirement to physically arm
+Remote Start before the machine goes to sleep.
+
 #### Examples (washer/dryer)
 
 - Get a notification when the clothes are done drying (or when the clothes are done washing, automation)
