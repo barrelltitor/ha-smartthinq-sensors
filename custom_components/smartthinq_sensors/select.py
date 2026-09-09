@@ -50,6 +50,50 @@ WASH_DEV_SELECT: tuple[ThinQSelectEntityDescription, ...] = (
         value_fn=lambda x: x.device.selected_course,
     ),
     ThinQSelectEntityDescription(
+        key="course_temperature",
+        name="Course temperature",
+        icon="mdi:thermometer-water",
+        options_fn=lambda x: x.device.course_option_list("temp"),
+        select_option_fn=lambda x, option: x.device.select_course_option(
+            "temp", option
+        ),
+        available_fn=lambda x: x.device.course_option_enabled("temp"),
+        value_fn=lambda x: x.device.selected_course_option("temp"),
+    ),
+    ThinQSelectEntityDescription(
+        key="course_spin",
+        name="Course spin speed",
+        icon="mdi:rotate-3d",
+        options_fn=lambda x: x.device.course_option_list("spin"),
+        select_option_fn=lambda x, option: x.device.select_course_option(
+            "spin", option
+        ),
+        available_fn=lambda x: x.device.course_option_enabled("spin"),
+        value_fn=lambda x: x.device.selected_course_option("spin"),
+    ),
+    ThinQSelectEntityDescription(
+        key="course_rinse",
+        name="Course rinse",
+        icon="mdi:waves-arrow-right",
+        options_fn=lambda x: x.device.course_option_list("rinse"),
+        select_option_fn=lambda x, option: x.device.select_course_option(
+            "rinse", option
+        ),
+        available_fn=lambda x: x.device.course_option_enabled("rinse"),
+        value_fn=lambda x: x.device.selected_course_option("rinse"),
+    ),
+    ThinQSelectEntityDescription(
+        key="course_dry_level",
+        name="Course drying",
+        icon="mdi:tumble-dryer",
+        options_fn=lambda x: x.device.course_option_list("dryLevel"),
+        select_option_fn=lambda x, option: x.device.select_course_option(
+            "dryLevel", option
+        ),
+        available_fn=lambda x: x.device.course_option_enabled("dryLevel"),
+        value_fn=lambda x: x.device.selected_course_option("dryLevel"),
+    ),
+    ThinQSelectEntityDescription(
         key="downloaded_course",
         name="Downloaded course",
         icon="mdi:download",

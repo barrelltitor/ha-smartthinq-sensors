@@ -100,6 +100,7 @@ _COURSE_KEYS = {
 }
 _COURSE_TYPE = "courseType"
 _CURRENT_COURSE = "Current course"
+_COURSE_OPTION_DEFAULT = "Course default"
 _DRY_LEVEL_OPTION = "dryLevel"
 _DRY_LEVEL_PREFIX = "DRYLEVEL_"
 _DRY_LEVEL_INTERNAL_VALUES = {"DRYLEVEL_COOLING"}
@@ -257,6 +258,49 @@ class WMDevice(Device):
                 course_type, course_info
             )
         return result
+
+    def course_option_list(self, option: str) -> list[str]:
+        """Return selectable values for one option on the staged course."""
+        if not self._selected_course:
+            return []
+        course = self._resolve_course(self._selected_course)
+        if course is None:
+            return []
+        course_type, _, _, course_info = course
+        option_info = self._get_course_option_details(course_type, course_info).get(
+            option
+        )
+        if option_info is None:
+            return []
+        return [
+            _COURSE_OPTION_DEFAULT,
+            *map(str, option_info["selectable"]),
+        ]
+
+    def selected_course_option(self, option: str) -> str | None:
+        """Return the staged value for a course option."""
+        if not self.course_option_list(option):
+            return None
+        value = self._course_overrides.get(option)
+        return str(value) if value is not None else _COURSE_OPTION_DEFAULT
+
+    def course_option_enabled(self, option: str) -> bool:
+        """Return whether an option is adjustable for the staged course."""
+        return self.select_course_enabled and bool(self.course_option_list(option))
+
+    async def select_course_option(self, option: str, value: str) -> None:
+        """Stage one model-validated option without starting the appliance."""
+        if not self.course_option_enabled(option) or not self._selected_course:
+            raise InvalidDeviceStatus()
+
+        if value == _COURSE_OPTION_DEFAULT:
+            self._course_overrides.pop(option, None)
+            return
+
+        normalized = self._validate_course_overrides(
+            self._selected_course, {option: value}
+        )
+        self._course_overrides[option] = normalized[option]
 
     @property
     def run_state(self) -> str:
