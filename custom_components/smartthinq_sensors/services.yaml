@@ -1,3 +1,47 @@
+download_course:
+  name: Download course
+  description: >-
+    Replace the appliance download slot with a model-supported Smart Course and
+    stage that course for the next Remote Start. This sends a command to the
+    appliance but does not start it.
+  target:
+    entity:
+      integration: smartthinq_sensors
+      domain: sensor
+  fields:
+    course:
+      name: Course
+      description: Exact course name from the downloadable_courses sensor attribute.
+      required: true
+      selector:
+        text:
+
+prepare_course:
+  name: Prepare course
+  description: >-
+    Validate and stage a washer course and its options in Home Assistant without
+    sending a start command to the appliance.
+  target:
+    entity:
+      integration: smartthinq_sensors
+      domain: sensor
+  fields:
+    course:
+      name: Course
+      description: Exact course name from the washer course selection entity.
+      required: true
+      selector:
+        text:
+    overrides:
+      name: Course option overrides
+      description: >-
+        Option values for the selected course, using keys and values from the
+        washer model data (for example, {"temp": "TEMP_40", "spin": "SPIN_1200",
+        "dryLevel": "DRYLEVEL_60"}).
+      required: false
+      selector:
+        object:
+
 remote_start:
   name: Remote Start
   description: Send to ThinQ device the remote start command.
@@ -7,11 +51,22 @@ remote_start:
       domain: sensor
   fields:
     course:
-      name: course
-      description: Course (if not set will use current)
+      name: Course
+      description: >-
+        Course to start. If omitted, a prepared course is used when available;
+        otherwise the current appliance course is used.
       required: false
       selector:
         text:
+    overrides:
+      name: Course option overrides
+      description: >-
+        Option values for the selected course, using keys and values from the
+        washer model data (for example, {"temp": "TEMP_40", "spin": "SPIN_1200",
+        "dryLevel": "DRYLEVEL_60"}).
+      required: false
+      selector:
+        object:
 
 wake_up:
   name: WakeUp

@@ -12,6 +12,12 @@ __min_ha_version__ = f"{MIN_HA_MAJ_VER}.{MIN_HA_MIN_VER}.0"
 
 # general sensor attributes
 ATTR_CURRENT_COURSE = "current_course"
+ATTR_COURSE_OPTIONS = "course_options"
+ATTR_DOWNLOADABLE_COURSES = "downloadable_courses"
+ATTR_DOWNLOADED_COURSE = "downloaded_course"
+ATTR_DOWNLOAD_COURSE_LIMIT = "download_course_limit"
+ATTR_PREPARED_COURSE = "prepared_course"
+ATTR_PREPARED_COURSE_OPTIONS = "prepared_course_options"
 ATTR_ERROR_STATE = "error_state"
 ATTR_INITIAL_TIME = "initial_time"
 ATTR_REMAIN_TIME = "remain_time"

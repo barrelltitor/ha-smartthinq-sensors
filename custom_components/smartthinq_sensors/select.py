@@ -49,6 +49,15 @@ WASH_DEV_SELECT: tuple[ThinQSelectEntityDescription, ...] = (
         available_fn=lambda x: x.device.select_course_enabled,
         value_fn=lambda x: x.device.selected_course,
     ),
+    ThinQSelectEntityDescription(
+        key="downloaded_course",
+        name="Downloaded course",
+        icon="mdi:download",
+        options_fn=lambda x: x.device.downloadable_course_list,
+        select_option_fn=lambda x, option: x.device.download_course(option),
+        available_fn=lambda x: x.device.download_course_enabled,
+        value_fn=lambda x: x.device.downloaded_course,
+    ),
 )
 MICROWAVE_SELECT: tuple[ThinQSelectEntityDescription, ...] = (
     ThinQSelectEntityDescription(
@@ -140,6 +149,11 @@ class LGESelect(CoordinatorEntity, SelectEntity):
         self._attr_unique_id = f"{api.unique_id}-{description.key}-select"
         self._attr_device_info = api.device_info
         self._attr_options = self.entity_description.options_fn(self._api)
+
+    @property
+    def options(self) -> list[str]:
+        """Return options, including any newly downloaded washer course."""
+        return self.entity_description.options_fn(self._api)
 
     async def async_select_option(self, option: str) -> None:
         """Change the selected option."""
