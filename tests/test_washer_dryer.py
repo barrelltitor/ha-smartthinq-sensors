@@ -123,6 +123,56 @@ def test_course_options_exposes_model_defaults_and_selectable_values():
     }
 
 
+async def test_course_option_selects_stage_and_clear_validated_values():
+    """Option selects expose only course values and update staged overrides."""
+    device = _make_device()
+    device._selected_course = "Cotton"
+    device._initial_bit_start = True
+
+    with patch.object(
+        WMDevice,
+        "remote_start_enabled",
+        new_callable=PropertyMock,
+        return_value=True,
+    ):
+        assert device.course_option_list("temp") == [
+            "Course default",
+            "TEMP_COLD",
+            "TEMP_40",
+            "TEMP_60",
+        ]
+        assert device.course_option_enabled("temp") is True
+        assert device.selected_course_option("temp") == "Course default"
+
+        await device.select_course_option("temp", "TEMP_60")
+        assert device.selected_course_option("temp") == "TEMP_60"
+        assert device.prepared_course_options == {"temp": "TEMP_60"}
+
+        await device.select_course_option("temp", "Course default")
+        assert device.selected_course_option("temp") == "Course default"
+        assert device.prepared_course_options == {}
+
+
+async def test_course_option_select_rejects_value_not_supported_by_course():
+    """Direct select calls cannot bypass model-derived validation."""
+    device = _make_device()
+    device._selected_course = "Cotton"
+    device._initial_bit_start = True
+
+    with (
+        patch.object(
+            WMDevice,
+            "remote_start_enabled",
+            new_callable=PropertyMock,
+            return_value=True,
+        ),
+        pytest.raises(InvalidCourseOptions) as err,
+    ):
+        await device.select_course_option("temp", "TEMP_95")
+
+    assert err.value.translation_key == "invalid_course_option_value"
+
+
 @pytest.mark.parametrize(
     "dry_level", ["DRYLEVEL_NORMAL", "DRYLEVEL_60", "DRYLEVEL_LOW"]
 )
