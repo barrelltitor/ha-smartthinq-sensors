@@ -205,6 +205,12 @@ Each course contains only adjustable options, with the model's `default` value
 and its `selectable` values, so dashboards and scripts can validate choices
 without duplicating the appliance model table.
 
+After selecting a named course, Home Assistant also exposes model-backed
+`Course temperature`, `Course spin speed`, `Course rinse`, and `Course drying`
+select entities. Each entity is available only when that setting can be changed
+for the selected course. Choosing `Course default` removes that override;
+choosing another value stages it locally for the next Remote Start.
+
 On ThinQ2 washer-dryers whose Wash+Dry and Dry Only definitions omit a
 per-course choice list, the integration uses the model's `dryLevel` enum. For
 example, the inspected `F_V7_F___W.B_2QEUK` model supports regular drying
