@@ -74,5 +74,34 @@
         "name": "Scan interval"
       }
     }
+  },
+  "exceptions": {
+    "course_download_not_supported": {
+      "message": "This appliance does not advertise downloadable-course support."
+    },
+    "invalid_download_course": {
+      "message": "Course {course} cannot be downloaded. Available downloadable courses: {available_courses}."
+    },
+    "course_not_downloaded": {
+      "message": "Course {course} is not currently stored in the appliance download slot. The downloaded course is {downloaded_course}."
+    },
+    "course_required_for_overrides": {
+      "message": "Select a named course when using course option overrides."
+    },
+    "course_options_not_ready": {
+      "message": "Course options can only be changed when the washer is armed for Remote Start and ready to begin a new cycle."
+    },
+    "invalid_course": {
+      "message": "Course {course} is not available. Available courses: {available_courses}."
+    },
+    "course_info_unavailable": {
+      "message": "The washer did not provide option information for course {course}."
+    },
+    "invalid_course_option": {
+      "message": "Option {option} cannot be changed for course {course}. Available options: {available_options}."
+    },
+    "invalid_course_option_value": {
+      "message": "Value {value} is not valid for option {option} on course {course}. Available values: {available_values}."
+    }
   }
 }

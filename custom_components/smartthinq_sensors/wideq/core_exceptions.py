@@ -81,6 +81,18 @@ class InvalidDeviceStatus(Exception):
     """Device exception occurred when status of device is not valid."""
 
 
+class InvalidCourseOptions(ValueError):
+    """Course option overrides do not match the selected course model data."""
+
+    def __init__(self, translation_key: str, **translation_placeholders):
+        """Initialize a translated course option validation error."""
+        self.translation_key = translation_key
+        self.translation_placeholders = {
+            key: str(value) for key, value in translation_placeholders.items()
+        }
+        super().__init__(translation_key)
+
+
 class AuthenticationError(Exception):
     """API exception occurred when fail to authenticate."""
 

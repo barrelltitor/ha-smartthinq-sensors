@@ -11,7 +11,7 @@ import logging
 from ..backports.functools import cached_property
 from ..const import StateOptions, WashDeviceFeatures
 from ..core_async import ClientAsync
-from ..core_exceptions import InvalidDeviceStatus
+from ..core_exceptions import InvalidCourseOptions, InvalidDeviceStatus
 from ..device import Device, DeviceStatus
 from ..device_info import DeviceInfo, DeviceType
 
@@ -39,6 +39,11 @@ CMD_REMOTE_START = [
     [None, "WMStart"],
     ["OperationStart", "WMStart"],
     ["Start", "WMStart"],
+]
+CMD_DOWNLOAD_COURSE = [
+    [None, "WMDownload"],
+    [None, "WMDownload"],
+    [None, "WMDownload"],
 ]
 
 VT_CTRL_CMD = {
@@ -95,6 +100,10 @@ _COURSE_KEYS = {
 }
 _COURSE_TYPE = "courseType"
 _CURRENT_COURSE = "Current course"
+_COURSE_OPTION_DEFAULT = "Course default"
+_DRY_LEVEL_OPTION = "dryLevel"
+_DRY_LEVEL_PREFIX = "DRYLEVEL_"
+_DRY_LEVEL_INTERNAL_VALUES = {"DRYLEVEL_COOLING"}
 
 
 class WMDevice(Device):
@@ -124,7 +133,11 @@ class WMDevice(Device):
         self._is_run_completed = False
         self._course_keys: dict[CourseType, str | None] | None = None
         self._course_infos: dict[str, str] | None = None
+        self._smart_course_infos: dict[str, str] | None = None
         self._selected_course: str | None = None
+        self._course_overrides: dict[str, object] = {}
+        self._download_course_id: str | None = None
+        self._downloaded_course_id: str | None = None
         self._is_cycle_finishing = False
         self._stand_by = False
         self._remote_start_status: dict | None = None
@@ -157,16 +170,137 @@ class WMDevice(Device):
         """Return the available sub key device."""
         return self._subkey_device
 
-    @cached_property
+    @property
     def course_list(self) -> list:
         """Return a list of available course."""
         course_infos = self._get_course_infos()
-        return [_CURRENT_COURSE, *course_infos.keys()]
+        courses = [_CURRENT_COURSE, *course_infos.keys()]
+        downloaded_course = self.downloaded_course
+        if downloaded_course and downloaded_course not in courses:
+            course_id = self._get_download_course_infos().get(downloaded_course)
+            course_info = self._get_course_details(
+                self.get_course_key(CourseType.SMARTCOURSE), course_id
+            )
+            if course_info and course_info.get("controlEnable", True):
+                courses.append(downloaded_course)
+        return courses
+
+    @property
+    def downloadable_course_list(self) -> list[str]:
+        """Return model-supported courses that can occupy the download slot."""
+        return list(self._get_download_course_infos())
+
+    @property
+    def downloaded_course(self) -> str | None:
+        """Return the course currently stored in the appliance download slot."""
+        downloaded_key = self._get_downloaded_course_key()
+        if downloaded_key and self._status:
+            downloaded_id = self._status.as_dict.get(downloaded_key)
+            if downloaded_id and downloaded_id != "NOT_SELECTED":
+                self._downloaded_course_id = str(downloaded_id)
+
+        if not self._downloaded_course_id:
+            return None
+        return next(
+            (
+                name
+                for name, course_id in self._get_download_course_infos().items()
+                if course_id == self._downloaded_course_id
+            ),
+            self._downloaded_course_id,
+        )
+
+    @property
+    def download_course_limit(self) -> int:
+        """Return number of downloadable course slots reported by the model."""
+        try:
+            return int(self.model_info.config_value("maxDownloadCourseNum") or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    @property
+    def download_course_enabled(self) -> bool:
+        """Return whether the appliance advertises downloadable-course control."""
+        return bool(
+            self.model_info.is_info_v2
+            and self.download_course_limit > 0
+            and self._get_download_course_infos()
+            and self.model_info.get_control_cmd("WMDownload")
+        )
 
     @property
     def selected_course(self) -> str:
         """Return current selected course."""
         return self._selected_course or _CURRENT_COURSE
+
+    @property
+    def prepared_course(self) -> str | None:
+        """Return the course staged for the next remote start."""
+        return self._selected_course
+
+    @property
+    def prepared_course_options(self) -> dict[str, object]:
+        """Return the options staged for the next remote start."""
+        return dict(self._course_overrides)
+
+    @property
+    def course_options(self) -> dict[str, dict[str, dict[str, object]]]:
+        """Return model-supported adjustable options for each available course."""
+        result = {}
+        for course_name in self.course_list:
+            if course_name == _CURRENT_COURSE:
+                continue
+            course = self._resolve_course(course_name)
+            if course is None:
+                continue
+            course_type, _, _, course_info = course
+            result[course_name] = self._get_course_option_details(
+                course_type, course_info
+            )
+        return result
+
+    def course_option_list(self, option: str) -> list[str]:
+        """Return selectable values for one option on the staged course."""
+        if not self._selected_course:
+            return []
+        course = self._resolve_course(self._selected_course)
+        if course is None:
+            return []
+        course_type, _, _, course_info = course
+        option_info = self._get_course_option_details(course_type, course_info).get(
+            option
+        )
+        if option_info is None:
+            return []
+        return [
+            _COURSE_OPTION_DEFAULT,
+            *map(str, option_info["selectable"]),
+        ]
+
+    def selected_course_option(self, option: str) -> str | None:
+        """Return the staged value for a course option."""
+        if not self.course_option_list(option):
+            return None
+        value = self._course_overrides.get(option)
+        return str(value) if value is not None else _COURSE_OPTION_DEFAULT
+
+    def course_option_enabled(self, option: str) -> bool:
+        """Return whether an option is adjustable for the staged course."""
+        return self.select_course_enabled and bool(self.course_option_list(option))
+
+    async def select_course_option(self, option: str, value: str) -> None:
+        """Stage one model-validated option without starting the appliance."""
+        if not self.course_option_enabled(option) or not self._selected_course:
+            raise InvalidDeviceStatus()
+
+        if value == _COURSE_OPTION_DEFAULT:
+            self._course_overrides.pop(option, None)
+            return
+
+        normalized = self._validate_course_overrides(
+            self._selected_course, {option: value}
+        )
+        self._course_overrides[option] = normalized[option]
 
     @property
     def run_state(self) -> str:
@@ -347,6 +481,60 @@ class WMDevice(Device):
         self._course_infos = ret_val
         return ret_val
 
+    def _get_download_course_infos(self) -> dict[str, str]:
+        """Return friendly names and IDs for downloadable Smart Courses."""
+        if self._smart_course_infos is not None:
+            return self._smart_course_infos
+
+        course_key = self.get_course_key(CourseType.SMARTCOURSE)
+        course_infos = (
+            self.model_info.reference_values(course_key) if course_key else None
+        )
+        if not course_infos:
+            self._smart_course_infos = {}
+            return {}
+
+        ret_val = {}
+        for key, value in course_infos.items():
+            if value.get("downloadEnable") is not True:
+                continue
+            if enum_name := value.get("name"):
+                name = self.get_enum_text(enum_name)
+                if name == enum_name:
+                    name = value.get("_comment", enum_name)
+            else:
+                name = value.get("_comment", key)
+            ret_val[name] = key
+
+        self._smart_course_infos = ret_val
+        return ret_val
+
+    def _get_downloaded_course_key(self) -> str | None:
+        """Return the model status key containing the downloaded course ID."""
+        if not self.model_info.is_info_v2:
+            return None
+        course_key = self.model_info.config_value(self.getkey("downloadedCourseType"))
+        if course_key and self.model_info.value_exist(course_key):
+            return course_key
+        return None
+
+    def _resolve_course(
+        self, course_name: str
+    ) -> tuple[CourseType, str, str, dict] | None:
+        """Resolve a friendly course name to its model type, key, ID, and data."""
+        if course_id := self._get_course_infos().get(course_name):
+            course_type = CourseType.COURSE
+        elif course_id := self._get_download_course_infos().get(course_name):
+            course_type = CourseType.SMARTCOURSE
+        else:
+            return None
+
+        course_key = self.get_course_key(course_type)
+        course_info = self._get_course_details(course_key, course_id)
+        if not course_key or not course_info:
+            return None
+        return course_type, course_key, course_id, course_info
+
     def _get_course_details(self, course_key, course_id):
         """Get definition for a specific course ID."""
         if course_key is None:
@@ -354,6 +542,107 @@ class WMDevice(Device):
         if courses := self.model_info.reference_values(course_key):
             return courses.get(course_id)
         return None
+
+    def _validate_course_overrides(
+        self, course_name: str | None, overrides: dict | None
+    ) -> dict[str, object]:
+        """Validate and normalize overrides using the selected course model data."""
+        if not overrides:
+            return {}
+        if not course_name or course_name == _CURRENT_COURSE:
+            raise InvalidCourseOptions("course_required_for_overrides")
+
+        course = self._resolve_course(course_name)
+        if course is None:
+            raise InvalidCourseOptions(
+                "invalid_course",
+                course=course_name,
+                available_courses=", ".join(self.course_list),
+            )
+        course_type, _, course_id, course_info = course
+        if (
+            course_type == CourseType.SMARTCOURSE
+            and course_id
+            != self._get_download_course_infos().get(self.downloaded_course)
+        ):
+            raise InvalidCourseOptions(
+                "course_not_downloaded",
+                course=course_name,
+                downloaded_course=self.downloaded_course or "none",
+            )
+
+        option_details = self._get_course_option_details(course_type, course_info)
+        available = {
+            option: tuple(details["selectable"])
+            for option, details in option_details.items()
+        }
+
+        normalized = {}
+        for option, value in overrides.items():
+            if not isinstance(option, str) or option not in available:
+                raise InvalidCourseOptions(
+                    "invalid_course_option",
+                    option=option,
+                    course=course_name,
+                    available_options=", ".join(available) or "none",
+                )
+
+            matched_value = next(
+                (
+                    allowed
+                    for allowed in available[option]
+                    if str(allowed) == str(value)
+                ),
+                None,
+            )
+            if matched_value is None:
+                raise InvalidCourseOptions(
+                    "invalid_course_option_value",
+                    value=value,
+                    option=option,
+                    course=course_name,
+                    available_values=", ".join(map(str, available[option])),
+                )
+            normalized[option] = matched_value
+
+        return normalized
+
+    def _get_course_option_details(
+        self, course_type: CourseType, course_info: dict
+    ) -> dict[str, dict[str, object]]:
+        """Return defaults and selectable values advertised for a course."""
+        available = {}
+        for function in course_info.get("function", []):
+            option = function.get("value")
+            selectable = function.get("selectable")
+            # Some ThinQ2 washer-dryers expose dry-level choices only in the
+            # global model enum. The option is adjustable on the appliance,
+            # but its course definition contains just a DRYLEVEL_* default.
+            # Use that enum only for an active standard-course dryLevel and
+            # omit values that represent internal operating states.
+            if (
+                selectable is None
+                and self.model_info.is_info_v2
+                and course_type == CourseType.COURSE
+                and option == _DRY_LEVEL_OPTION
+                and isinstance(function.get("default"), str)
+                and function["default"].startswith(_DRY_LEVEL_PREFIX)
+                and (dry_levels := self.model_info.value(_DRY_LEVEL_OPTION))
+            ):
+                selectable = [
+                    value
+                    for value in dry_levels.options
+                    if isinstance(value, str)
+                    and value.startswith(_DRY_LEVEL_PREFIX)
+                    and value not in _DRY_LEVEL_INTERNAL_VALUES
+                ]
+            if option and isinstance(selectable, list | tuple):
+                available[option] = {
+                    "default": function.get("default"),
+                    "selectable": list(selectable),
+                }
+
+        return available
 
     def _prepare_course_info(
         self,
@@ -401,8 +690,10 @@ class WMDevice(Device):
 
         for func_key in course_info["function"]:
             ckey = func_key.get("value")
-            cdata = func_key.get("default")
-            if not ckey or cdata is None:
+            if not ckey:
+                continue
+            cdata = self._course_overrides.get(ckey, func_key.get("default"))
+            if cdata is None:
                 continue
             opt_set = False
             for opt_name in option_keys:
@@ -451,11 +742,26 @@ class WMDevice(Device):
             def_course_id = str(self.model_info.config_value("defaultCourseId"))
 
         # Search valid course Info
-        if self._selected_course:
-            course_id = self._get_course_infos().get(self._selected_course)
+        selected_course = (
+            self._resolve_course(self._selected_course)
+            if self._selected_course
+            else None
+        )
+        if selected_course:
+            course_type, selected_key, course_id, course_info = selected_course
+            if (
+                course_type == CourseType.SMARTCOURSE
+                and course_id
+                != self._get_download_course_infos().get(self.downloaded_course)
+            ):
+                raise InvalidCourseOptions(
+                    "course_not_downloaded",
+                    course=self._selected_course,
+                    downloaded_course=self.downloaded_course or "none",
+                )
         else:
             course_id = None
-        course_info = None
+            course_info = None
         course_set = False
         if course_id is None:
             # check if this course is defined in data payload
@@ -468,8 +774,8 @@ class WMDevice(Device):
                         course_type = CourseType.SMARTCOURSE
                     course_set = True
                     break
-        else:
-            course_info = self._get_course_details(n_course_key, course_id)
+        elif not course_info:
+            course_info = self._get_course_details(selected_key, course_id)
 
         if not course_info:
             course_id = def_course_id
@@ -544,14 +850,36 @@ class WMDevice(Device):
             return cmd
 
         res_data_set = None
-        if key and "WMStart" in key and WM_ROOT_DATA in data_set:
-            status_data = self._update_course_info()
+        course_command = key and any(
+            command in key for command in ["WMStart", "WMDownload"]
+        )
+        if course_command and WM_ROOT_DATA in data_set:
+            is_download = "WMDownload" in key
+            if is_download:
+                course_id = self._download_course_id
+                course_key = self.get_course_key(CourseType.SMARTCOURSE)
+                course_info = self._get_course_details(course_key, course_id)
+                if not course_id or not course_info:
+                    raise ValueError("Download course info not available")
+                status_data = self._prepare_course_info(
+                    {},
+                    course_id,
+                    course_info,
+                    CourseType.SMARTCOURSE,
+                    False,
+                    self.get_course_key(CourseType.COURSE),
+                    course_key,
+                )
+            else:
+                status_data = self._update_course_info()
             n_course_key = self.get_course_key(CourseType.COURSE)
             s_course_key = self.get_course_key(CourseType.SMARTCOURSE)
             op_course_key = self.get_course_key(CourseType.OPCOURSE)
             cmd_data_set = {}
 
-            if _COURSE_TYPE in status_data:
+            # Keep WMDownload identical to the appliance model template and do
+            # not add the descriptive ``courseType`` member used by WMStart.
+            if not is_download and _COURSE_TYPE in status_data:
                 cmd_data_set[_COURSE_TYPE] = status_data[_COURSE_TYPE]
 
             for cmd_key, cmd_value in data_set[WM_ROOT_DATA].items():
@@ -580,6 +908,8 @@ class WMDevice(Device):
                         cmd_data_set[cmd_key] = f"{prefix}INITIAL_BIT_OFF"
                 else:
                     cmd_data_set[cmd_key] = status_data.get(cmd_key, cmd_value)
+            if is_download and (downloaded_key := self._get_downloaded_course_key()):
+                cmd_data_set[downloaded_key] = self._download_course_id
             res_data_set = {WM_ROOT_DATA: cmd_data_set}
 
         return {
@@ -692,10 +1022,7 @@ class WMDevice(Device):
     @property
     def select_course_enabled(self) -> bool:
         """Return if selecr course is enabled."""
-        enabled = self._initial_bit_start and self.remote_start_enabled
-        if not enabled and self._selected_course:
-            self._selected_course = None
-        return enabled
+        return self._initial_bit_start and self.remote_start_enabled
 
     async def select_start_course(self, course_name: str) -> None:
         """Select a secific course for remote start."""
@@ -704,10 +1031,60 @@ class WMDevice(Device):
 
         if course_name == _CURRENT_COURSE:
             self._selected_course = None
+            self._course_overrides = {}
             return
         if course_name not in self.course_list:
-            raise ValueError(f"Invalid course: {course_name}")
+            raise InvalidCourseOptions(
+                "invalid_course",
+                course=course_name,
+                available_courses=", ".join(self.course_list),
+            )
+        if course_name != self._selected_course:
+            self._course_overrides = {}
         self._selected_course = course_name
+
+    async def prepare_course(
+        self, course_name: str, overrides: dict | None = None
+    ) -> None:
+        """Validate and stage a course without sending an appliance command."""
+        course_overrides = self._validate_course_overrides(course_name, overrides)
+        await self.select_start_course(course_name)
+        self._course_overrides = course_overrides
+
+    async def download_course(self, course_name: str) -> None:
+        """Download a model-supported Smart Course and stage it for remote start."""
+        course_id = self._get_download_course_infos().get(course_name)
+        if not self.download_course_enabled:
+            raise InvalidCourseOptions("course_download_not_supported")
+        if course_id is None:
+            raise InvalidCourseOptions(
+                "invalid_download_course",
+                course=course_name,
+                available_courses=", ".join(self.downloadable_course_list) or "none",
+            )
+
+        course_info = self._get_course_details(
+            self.get_course_key(CourseType.SMARTCOURSE), course_id
+        )
+        if not course_info or course_info.get("downloadEnable") is not True:
+            raise InvalidCourseOptions(
+                "invalid_download_course",
+                course=course_name,
+                available_courses=", ".join(self.downloadable_course_list) or "none",
+            )
+
+        self._download_course_id = course_id
+        try:
+            keys = self._get_cmd_keys(CMD_DOWNLOAD_COURSE)
+            await self.set(keys[0], keys[1], key=keys[2])
+        finally:
+            self._download_course_id = None
+
+        self._downloaded_course_id = course_id
+        self._update_status(self._get_downloaded_course_key(), course_id)
+        if course_info.get("controlEnable", True):
+            self._selected_course = course_name
+            self._course_overrides = {}
 
     async def power_off(self):
         """Power off the device."""
@@ -717,25 +1094,51 @@ class WMDevice(Device):
         self._update_status(POWER_STATUS_KEY, self._state_power_off)
 
     async def wake_up(self):
-        """Wakeup the device."""
-        if not self._stand_by:
-            raise InvalidDeviceStatus()
-
+        """Wakeup the device from power-save / sleep mode."""
+        # Do not gate on ``self._stand_by``: when the appliance is in
+        # power-save sleep it reports an empty status (so ``_stand_by`` is
+        # False), yet that is exactly when a wake-up is required. The
+        # official ThinQ app's "sleep off" button is likewise always
+        # available in this state.
         keys = self._get_cmd_keys(CMD_WAKE_UP)
         await self.set(keys[0], keys[1])
         self._stand_by = False
         self._update_status(POWER_STATUS_KEY, self._state_power_on_init)
 
-    async def remote_start(self, course_name: str | None = None) -> None:
-        """Remote start the device."""
+    async def remote_start(
+        self, course_name: str | None = None, overrides: dict | None = None
+    ) -> None:
+        """Remote start the device, optionally overriding course settings."""
         if not self.remote_start_enabled:
             raise InvalidDeviceStatus()
+
+        if overrides and not self._initial_bit_start:
+            raise InvalidCourseOptions("course_options_not_ready")
+
+        use_prepared_course = (
+            course_name is None
+            and overrides is None
+            and self._selected_course is not None
+        )
+        if use_prepared_course:
+            course_overrides = dict(self._course_overrides)
+        else:
+            course_overrides = self._validate_course_overrides(course_name, overrides)
 
         if course_name and self._initial_bit_start:
             await self.select_start_course(course_name)
 
-        keys = self._get_cmd_keys(CMD_REMOTE_START)
-        await self.set(keys[0], keys[1], key=keys[2])
+        self._course_overrides = course_overrides
+        try:
+            keys = self._get_cmd_keys(CMD_REMOTE_START)
+            await self.set(keys[0], keys[1], key=keys[2])
+        except Exception:
+            if not use_prepared_course:
+                self._course_overrides = {}
+            raise
+        else:
+            self._selected_course = None
+            self._course_overrides = {}
         self._remote_start_pressed = True
 
     async def pause(self):

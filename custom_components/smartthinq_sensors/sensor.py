@@ -25,6 +25,7 @@ from homeassistant.const import (
     UnitOfTime,
 )
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddEntitiesCallback, current_platform
@@ -33,12 +34,18 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from . import LGEDevice
 from .const import (
+    ATTR_COURSE_OPTIONS,
     ATTR_CURRENT_COURSE,
+    ATTR_DOWNLOAD_COURSE_LIMIT,
+    ATTR_DOWNLOADABLE_COURSES,
+    ATTR_DOWNLOADED_COURSE,
     ATTR_FREEZER_TEMP,
     ATTR_FRIDGE_TEMP,
     ATTR_INITIAL_TIME,
     ATTR_OVEN_LOWER_TARGET_TEMP,
     ATTR_OVEN_UPPER_TARGET_TEMP,
+    ATTR_PREPARED_COURSE,
+    ATTR_PREPARED_COURSE_OPTIONS,
     ATTR_REMAIN_TIME,
     ATTR_RESERVE_TIME,
     DEFAULT_ICON,
@@ -67,8 +74,11 @@ from .wideq import (
     WashDeviceFeatures,
     WaterHeaterFeatures,
 )
+from .wideq.core_exceptions import InvalidCourseOptions
 
 # service definition
+SERVICE_DOWNLOAD_COURSE = "download_course"
+SERVICE_PREPARE_COURSE = "prepare_course"
 SERVICE_REMOTE_START = "remote_start"
 SERVICE_WAKE_UP = "wake_up"
 SERVICE_SET_TIME = "set_time"
@@ -616,8 +626,20 @@ async def async_setup_entry(
     # register services
     platform = current_platform.get()
     platform.async_register_entity_service(
+        SERVICE_DOWNLOAD_COURSE,
+        {vol.Required("course"): str},
+        "async_download_course",
+        [SUPPORT_WM_SERVICES],
+    )
+    platform.async_register_entity_service(
+        SERVICE_PREPARE_COURSE,
+        {vol.Required("course"): str, vol.Optional("overrides"): dict},
+        "async_prepare_course",
+        [SUPPORT_WM_SERVICES],
+    )
+    platform.async_register_entity_service(
         SERVICE_REMOTE_START,
-        {vol.Optional("course"): str},
+        {vol.Optional("course"): str, vol.Optional("overrides"): dict},
         "async_remote_start",
         [SUPPORT_WM_SERVICES],
     )
@@ -707,7 +729,21 @@ class LGESensor(CoordinatorEntity, SensorEntity):
     def extra_state_attributes(self):
         """Return the optional state attributes."""
         if self._is_default and self._wrap_device:
-            return self._wrap_device.extra_state_attributes
+            data = dict(self._wrap_device.extra_state_attributes)
+            if self._api.type in WM_DEVICE_TYPES:
+                data[ATTR_COURSE_OPTIONS] = self._api.device.course_options
+                data[ATTR_DOWNLOADABLE_COURSES] = (
+                    self._api.device.downloadable_course_list
+                )
+                data[ATTR_DOWNLOADED_COURSE] = self._api.device.downloaded_course
+                data[ATTR_DOWNLOAD_COURSE_LIMIT] = (
+                    self._api.device.download_course_limit
+                )
+                data[ATTR_PREPARED_COURSE] = self._api.device.prepared_course
+                data[ATTR_PREPARED_COURSE_OPTIONS] = (
+                    self._api.device.prepared_course_options
+                )
+            return data
 
         features = self.entity_description.feature_attributes
         if not (features and self._api.state):
@@ -729,11 +765,50 @@ class LGESensor(CoordinatorEntity, SensorEntity):
 
         return None
 
-    async def async_remote_start(self, course: str | None = None):
+    async def async_remote_start(
+        self, course: str | None = None, overrides: dict | None = None
+    ):
         """Call the remote start command for WM devices."""
         if self._api.type not in WM_DEVICE_TYPES:
             raise NotImplementedError()
-        await self._api.device.remote_start(course)
+        try:
+            await self._api.device.remote_start(course, overrides)
+        except InvalidCourseOptions as err:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key=err.translation_key,
+                translation_placeholders=err.translation_placeholders,
+            ) from err
+
+    async def async_download_course(self, course: str) -> None:
+        """Download a Smart Course and stage it for the next remote start."""
+        if self._api.type not in WM_DEVICE_TYPES:
+            raise NotImplementedError()
+        try:
+            await self._api.device.download_course(course)
+        except InvalidCourseOptions as err:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key=err.translation_key,
+                translation_placeholders=err.translation_placeholders,
+            ) from err
+        self._api.async_set_updated()
+
+    async def async_prepare_course(
+        self, course: str, overrides: dict | None = None
+    ) -> None:
+        """Validate and stage a WM course without starting the device."""
+        if self._api.type not in WM_DEVICE_TYPES:
+            raise NotImplementedError()
+        try:
+            await self._api.device.prepare_course(course, overrides)
+        except InvalidCourseOptions as err:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key=err.translation_key,
+                translation_placeholders=err.translation_placeholders,
+            ) from err
+        self._api.async_set_updated()
 
     async def async_wake_up(self):
         """Call the wakeup command for WM devices."""
