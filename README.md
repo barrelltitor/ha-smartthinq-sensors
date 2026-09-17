@@ -201,15 +201,18 @@ Course names, option keys, and option values come from the washer's ThinQ model
 data and vary by model. Invalid combinations are rejected before a command is
 sent, and the Home Assistant action error lists the available choices. The main
 washer sensor exposes the same information in its `course_options` attribute.
-Each course contains only adjustable options, with the model's `default` value
-and its `selectable` values, so dashboards and scripts can validate choices
-without duplicating the appliance model table.
+Each course contains its exposed settings, with the model's `default` value and
+any `selectable` alternatives, so dashboards and scripts can validate choices
+without duplicating the appliance model table. Fixed settings are intentionally
+reported with an empty `selectable` list instead of being omitted.
 
 After selecting a named course, Home Assistant also exposes model-backed
-`Course temperature`, `Course spin speed`, `Course rinse`, and `Course drying`
-select entities. Each entity is available only when that setting can be changed
-for the selected course. Choosing `Course default` removes that override;
-choosing another value stages it locally for the next Remote Start.
+`Course wash level`, `Course temperature`, `Course spin speed`, `Course rinse`,
+and `Course drying` select entities. Each select shows the course's actual
+model-defined default first, followed by any permitted alternatives. A fixed
+course therefore remains readable with a single choice instead of appearing
+unavailable. Choosing the default removes that override; choosing another value
+stages it locally for the next Remote Start.
 
 On ThinQ2 washer-dryers whose Wash+Dry and Dry Only definitions omit a
 per-course choice list, the integration uses the model's `dryLevel` enum. For
