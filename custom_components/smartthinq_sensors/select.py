@@ -50,6 +50,17 @@ WASH_DEV_SELECT: tuple[ThinQSelectEntityDescription, ...] = (
         value_fn=lambda x: x.device.selected_course,
     ),
     ThinQSelectEntityDescription(
+        key="course_wash_level",
+        name="Course wash level",
+        icon="mdi:washing-machine",
+        options_fn=lambda x: x.device.course_option_list("soilWash"),
+        select_option_fn=lambda x, option: x.device.select_course_option(
+            "soilWash", option
+        ),
+        available_fn=lambda x: x.device.course_option_enabled("soilWash"),
+        value_fn=lambda x: x.device.selected_course_option("soilWash"),
+    ),
+    ThinQSelectEntityDescription(
         key="course_temperature",
         name="Course temperature",
         icon="mdi:thermometer-water",

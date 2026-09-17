@@ -7,6 +7,7 @@ import pytest
 
 from homeassistant.exceptions import ServiceValidationError
 
+from custom_components.smartthinq_sensors.select import WASH_DEV_SELECT
 from custom_components.smartthinq_sensors.sensor import LGESensor
 from custom_components.smartthinq_sensors.wideq.core_exceptions import (
     InvalidCourseOptions,
@@ -50,13 +51,36 @@ SMART_COURSE_INFO = {
     ],
 }
 
+LINGERIE_COURSE_INFO = {
+    "_comment": "Lingerie",
+    "Course": "DELICATE",
+    "courseType": "SmartCourse",
+    "downloadEnable": True,
+    "controlEnable": True,
+    "function": [
+        {"value": "soilWash", "default": "SOILWASH_NORMAL"},
+        {"value": "spin", "default": "SPIN_800"},
+        {"value": "temp", "default": "TEMP_20"},
+        {"value": "rinse", "default": "RINSE_NORMAL"},
+        {"value": "dryLevel", "default": "NOT_SELECTED"},
+    ],
+}
 
-def _make_device(course_info=COURSE_INFO, *, info_v2=True, option_keys=None):
+
+def _make_device(
+    course_info=COURSE_INFO,
+    *,
+    info_v2=True,
+    option_keys=None,
+    smart_course_info=SMART_COURSE_INFO,
+    smart_course_name="Jeans",
+    smart_course_id="JEANS",
+):
     """Create a minimally initialized device backed by model course data."""
     device = object.__new__(WMDevice)
     device._sub_key = None
     device._course_infos = {"Cotton": "1"}
-    device._smart_course_infos = {"Jeans": "JEANS"}
+    device._smart_course_infos = {smart_course_name: smart_course_id}
     device._course_keys = {
         CourseType.COURSE: "courseType",
         CourseType.SMARTCOURSE: "smartCourseType",
@@ -65,11 +89,11 @@ def _make_device(course_info=COURSE_INFO, *, info_v2=True, option_keys=None):
     device._course_overrides = {}
     device._selected_course = None
     device._download_course_id = None
-    device._downloaded_course_id = "JEANS"
+    device._downloaded_course_id = smart_course_id
     device._initial_bit_start = False
     course_data = {
         "courseType": {"1": course_info},
-        "smartCourseType": {"JEANS": SMART_COURSE_INFO},
+        "smartCourseType": {smart_course_id: smart_course_info},
     }
     device._model_info = SimpleNamespace(
         is_info_v2=info_v2,
@@ -87,7 +111,7 @@ def _make_device(course_info=COURSE_INFO, *, info_v2=True, option_keys=None):
             else None
         ),
     )
-    status_data = {"downloadedCourseType": "JEANS"}
+    status_data = {"downloadedCourseType": smart_course_id}
     device._status = SimpleNamespace(
         as_dict=status_data,
         update_status=lambda key, value: status_data.update({key: value}) or True,
@@ -119,12 +143,16 @@ def test_course_options_exposes_model_defaults_and_selectable_values():
                 "selectable": ["SPIN_800", "SPIN_1200"],
             },
         },
-        "Jeans": {},
+        "Jeans": {
+            "soilWash": {"default": "SOILWASH_NORMAL", "selectable": []},
+            "spin": {"default": "SPIN_Max", "selectable": []},
+            "temp": {"default": "TEMP_20", "selectable": []},
+        },
     }
 
 
 async def test_course_option_selects_stage_and_clear_validated_values():
-    """Option selects expose only course values and update staged overrides."""
+    """Option selects show actual defaults and update staged overrides."""
     device = _make_device()
     device._selected_course = "Cotton"
     device._initial_bit_start = True
@@ -136,21 +164,62 @@ async def test_course_option_selects_stage_and_clear_validated_values():
         return_value=True,
     ):
         assert device.course_option_list("temp") == [
-            "Course default",
-            "TEMP_COLD",
             "TEMP_40",
+            "TEMP_COLD",
             "TEMP_60",
         ]
         assert device.course_option_enabled("temp") is True
-        assert device.selected_course_option("temp") == "Course default"
+        assert device.selected_course_option("temp") == "TEMP_40"
 
         await device.select_course_option("temp", "TEMP_60")
         assert device.selected_course_option("temp") == "TEMP_60"
         assert device.prepared_course_options == {"temp": "TEMP_60"}
 
-        await device.select_course_option("temp", "Course default")
-        assert device.selected_course_option("temp") == "Course default"
+        await device.select_course_option("temp", "TEMP_40")
+        assert device.selected_course_option("temp") == "TEMP_40"
         assert device.prepared_course_options == {}
+
+
+async def test_lingerie_selects_show_exact_fixed_model_defaults():
+    """A fixed Smart Course remains readable without inventing choices."""
+    device = _make_device(
+        smart_course_info=LINGERIE_COURSE_INFO,
+        smart_course_name="Lingerie",
+        smart_course_id="LINGERIE",
+    )
+    device._selected_course = "Lingerie"
+    device._initial_bit_start = True
+
+    expected = {
+        "soilWash": "SOILWASH_NORMAL",
+        "temp": "TEMP_20",
+        "spin": "SPIN_800",
+        "rinse": "RINSE_NORMAL",
+        "dryLevel": "NOT_SELECTED",
+    }
+    with patch.object(
+        WMDevice,
+        "remote_start_enabled",
+        new_callable=PropertyMock,
+        return_value=True,
+    ):
+        for option, default in expected.items():
+            assert device.course_option_list(option) == [default]
+            assert device.course_option_enabled(option) is True
+            assert device.selected_course_option(option) == default
+
+            await device.select_course_option(option, default)
+            assert device.prepared_course_options == {}
+
+    assert device.course_options["Lingerie"] == {
+        option: {"default": default, "selectable": []}
+        for option, default in expected.items()
+    }
+
+
+def test_washer_selects_include_course_wash_level():
+    """The model's soilWash setting has a persistent select entity."""
+    assert "course_wash_level" in {description.key for description in WASH_DEV_SELECT}
 
 
 async def test_course_option_select_rejects_value_not_supported_by_course():
